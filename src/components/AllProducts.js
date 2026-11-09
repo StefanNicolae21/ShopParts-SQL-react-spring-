@@ -1,4 +1,6 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { addToCart } from "../api/cart";
+import { deleteProduct, getProducts } from "../api/products";
 import "./AllProducts.css";
 
 const TIP = { 1: "Electric", 2: "Mecanic" };
@@ -11,85 +13,113 @@ const CAT = {
   6: "Elemente de caroserie",
   7: "Elemente electrice",
 };
+const currency = new Intl.NumberFormat("ro-RO", {
+  style: "currency",
+  currency: "RON",
+});
 
-class AllProducts extends React.Component {
-  state = { items: [], loading: true, error: "" };
+export default function AllProducts() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [deletingIds, setDeletingIds] = useState([]);
 
-  componentDidMount() {
-    this.load();
-  }
-
-  load = () => {
-    fetch("http://localhost:8080/produs")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((items) => this.setState({ items, loading: false, error: "" }))
-      .catch((e) => this.setState({ error: String(e), loading: false }));
-  };
-
-  handleDelete = async (id) => {
-    const prev = this.state.items;
-    // optimist update
-    this.setState({ items: prev.filter((x) => x.id !== id) });
+  const loadProducts = useCallback(async () => {
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch(`http://localhost:8080/produs/${id}`, {
-        method: "DELETE",
+      setItems(await getProducts());
+    } catch (loadError) {
+      setError("Nu s-au putut încărca produsele. Verifică dacă serverul API este pornit.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProducts();
+  }, [loadProducts]);
+
+  const handleDelete = async (product) => {
+    const previousItems = items;
+    setItems((current) => current.filter((item) => String(item.id) !== String(product.id)));
+    setDeletingIds((current) => [...current, product.id]);
+    setError("");
+    try {
+      await deleteProduct(product.id);
+    } catch (deleteError) {
+      setItems((current) => {
+        if (current.some((item) => String(item.id) === String(product.id))) return current;
+        const previousIndex = previousItems.findIndex(
+          (item) => String(item.id) === String(product.id)
+        );
+        const restored = [...current];
+        restored.splice(Math.min(previousIndex, restored.length), 0, product);
+        return restored;
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch (e) {
-      // rollback dacă eșuează
-      this.setState({ items: prev, error: "Nu s-a putut șterge. Încearcă din nou." });
+      setError("Nu s-a putut șterge produsul. Încearcă din nou.");
+    } finally {
+      setDeletingIds((current) => current.filter((id) => String(id) !== String(product.id)));
     }
   };
 
-  render() {
-    const { items, loading, error } = this.state;
-    if (loading) return <p style={{ padding: 16 }}>Se încarcă…</p>;
+  const handleAddToCart = (product) => {
+    setNotice(
+      addToCart(product)
+        ? `${product.descriere} a fost adăugat în coș.`
+        : "Coșul nu a putut fi salvat. Verifică setările de stocare ale browserului."
+    );
+  };
 
-    return (
-      <div style={{ padding: 16 }}>
-        <h2>All Products DB</h2>
-        {error && <p style={{ color: "crimson" }}>Eroare: {error}</p>}
+  if (loading) return <p role="status" style={{ padding: 16 }}>Se încarcă produsele…</p>;
 
-        {items.length === 0 ? (
-          <p>Nu există produse încă.</p>
-        ) : (
+  return (
+    <main style={{ padding: 16 }}>
+      <h2>All Products DB</h2>
+      {error && <p role="alert" style={{ color: "crimson" }}>{error}</p>}
+      {notice && <p role="status">{notice}</p>}
+      {items.length === 0 ? (
+        <p>Nu există produse încă.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
           <table border="1" cellPadding="8" style={{ width: "100%", background: "white" }}>
             <thead>
               <tr>
-                <th>#ID</th>
-                <th>Denumire</th>
-                <th>Preț</th>
-                <th>Tip</th>
-                <th>Categorie</th>
-                <th>Data adăugării</th>
-                <th></th>
+                <th scope="col">#ID</th>
+                <th scope="col">Denumire</th>
+                <th scope="col">Preț</th>
+                <th scope="col">Tip</th>
+                <th scope="col">Categorie</th>
+                <th scope="col">Data adăugării</th>
+                <th scope="col">Acțiuni</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.id}</td>
-                  <td>{p.descriere}</td>
-                  <td>{Number(p.pret)}</td>
-                  <td>{TIP[p.tipID] || p.tipID}</td>
-                  <td>{CAT[p.categorieID] || p.categorieID}</td>
-                  <td>{p.data_Adaugarii || "-"}</td>
+              {items.map((product) => (
+                <tr key={product.id}>
+                  <td>{product.id}</td>
+                  <td>{product.descriere}</td>
+                  <td>{currency.format(Number(product.pret) || 0)}</td>
+                  <td>{TIP[product.tipID] || product.tipID || "-"}</td>
+                  <td>{CAT[product.categorieID] || product.categorieID || "-"}</td>
+                  <td>{product.data_Adaugarii || "-"}</td>
                   <td>
-                    <button onClick={() => this.handleDelete(p.id)}>Șterge</button>
+                    <button type="button" onClick={() => handleAddToCart(product)}>Adaugă în coș</button>{" "}
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(product)}
+                      disabled={deletingIds.some((id) => String(id) === String(product.id))}
+                    >
+                      {deletingIds.some((id) => String(id) === String(product.id)) ? "Se șterge…" : "Șterge"}
+                    </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        )}
-      </div>
-    );
-  }
+        </div>
+      )}
+    </main>
+  );
 }
-
-export default AllProducts;
-
-    
